@@ -9,9 +9,9 @@
 
 package com.facebook.imagepipeline.producers;
 
+import com.facebook.common.memory.PooledByteBuffer;
 import com.facebook.common.references.CloseableReference;
 import com.facebook.imagepipeline.image.EncodedImage;
-import com.facebook.imagepipeline.memory.PooledByteBuffer;
 
 /**
  * Remove image transform meta data producer
@@ -44,13 +44,13 @@ public class RemoveImageTransformMetaDataProducer
     }
 
     @Override
-    protected void onNewResultImpl(EncodedImage newResult, boolean isLast) {
+    protected void onNewResultImpl(EncodedImage newResult, @Status int status) {
       CloseableReference<PooledByteBuffer> ret = null;
       try {
         if (EncodedImage.isValid(newResult)) {
           ret = newResult.getByteBufferRef();
         }
-        getConsumer().onNewResult(ret, isLast);
+        getConsumer().onNewResult(ret, status);
       } finally {
         CloseableReference.closeSafely(ret);
       }

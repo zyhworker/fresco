@@ -9,12 +9,16 @@
 
 package com.facebook.imagepipeline.animated.factory;
 
+import java.util.ArrayList;
+import java.util.List;
+
 import android.annotation.SuppressLint;
 import android.graphics.Bitmap;
 import android.graphics.Color;
 import android.os.Build;
 
 import com.facebook.common.internal.Preconditions;
+import com.facebook.common.memory.PooledByteBuffer;
 import com.facebook.common.references.CloseableReference;
 import com.facebook.imagepipeline.animated.base.AnimatedDrawableBackend;
 import com.facebook.imagepipeline.animated.base.AnimatedImage;
@@ -25,11 +29,9 @@ import com.facebook.imagepipeline.bitmaps.PlatformBitmapFactory;
 import com.facebook.imagepipeline.common.ImageDecodeOptions;
 import com.facebook.imagepipeline.image.CloseableAnimatedImage;
 import com.facebook.imagepipeline.image.CloseableImage;
+import com.facebook.imagepipeline.image.CloseableStaticBitmap;
 import com.facebook.imagepipeline.image.EncodedImage;
-import com.facebook.imagepipeline.memory.PooledByteBuffer;
-
-import java.util.ArrayList;
-import java.util.List;
+import com.facebook.imagepipeline.image.ImmutableQualityInfo;
 
 /**
  * Decoder for animated images.
@@ -81,7 +83,6 @@ public class AnimatedImageFactoryImpl implements AnimatedImageFactory {
     final CloseableReference<PooledByteBuffer> bytesRef = encodedImage.getByteBufferRef();
     Preconditions.checkNotNull(bytesRef);
     try {
-      Preconditions.checkState(!options.forceOldAnimationCode);
       final PooledByteBuffer input = bytesRef.get();
       AnimatedImage gifImage = sGifAnimatedImageDecoder.decode(input.getNativePtr(), input.size());
 
@@ -109,7 +110,6 @@ public class AnimatedImageFactoryImpl implements AnimatedImageFactory {
     final CloseableReference<PooledByteBuffer> bytesRef = encodedImage.getByteBufferRef();
     Preconditions.checkNotNull(bytesRef);
     try {
-      Preconditions.checkArgument(!options.forceOldAnimationCode);
       final PooledByteBuffer input = bytesRef.get();
       AnimatedImage webPImage = sWebpAnimatedImageDecoder.decode(
           input.getNativePtr(),
@@ -120,14 +120,21 @@ public class AnimatedImageFactoryImpl implements AnimatedImageFactory {
     }
   }
 
-  private CloseableAnimatedImage getCloseableImage(
+  private CloseableImage getCloseableImage(
       ImageDecodeOptions options,
       AnimatedImage image,
       Bitmap.Config bitmapConfig) {
     List<CloseableReference<Bitmap>> decodedFrames = null;
     CloseableReference<Bitmap> previewBitmap = null;
     try {
-      int frameForPreview = options.useLastFrameForPreview ? image.getFrameCount() - 1 : 0;
+      final int frameForPreview = options.useLastFrameForPreview ? image.getFrameCount() - 1 : 0;
+      if (options.forceStaticImage) {
+        return new CloseableStaticBitmap(
+            createPreviewBitmap(image, bitmapConfig, frameForPreview),
+            ImmutableQualityInfo.FULL_QUALITY,
+            0);
+      }
+
       if (options.decodeAllFrames) {
         decodedFrames = decodeAllFrames(image, bitmapConfig);
         previewBitmap = CloseableReference.cloneOrNull(decodedFrames.get(frameForPreview));
@@ -179,10 +186,11 @@ public class AnimatedImageFactoryImpl implements AnimatedImageFactory {
   private List<CloseableReference<Bitmap>> decodeAllFrames(
       AnimatedImage image,
       Bitmap.Config bitmapConfig) {
-    final List<CloseableReference<Bitmap>> bitmaps = new ArrayList<>();
     AnimatedImageResult tempResult = AnimatedImageResult.forAnimatedImage(image);
     AnimatedDrawableBackend drawableBackend =
         mAnimatedDrawableBackendProvider.get(tempResult, null);
+    final List<CloseableReference<Bitmap>> bitmaps =
+            new ArrayList<>(drawableBackend.getFrameCount());
     AnimatedImageCompositor animatedImageCompositor = new AnimatedImageCompositor(
         drawableBackend,
         new AnimatedImageCompositor.Callback() {
@@ -212,7 +220,8 @@ public class AnimatedImageFactoryImpl implements AnimatedImageFactory {
       int width,
       int height,
       Bitmap.Config bitmapConfig) {
-    CloseableReference<Bitmap> bitmap = mBitmapFactory.createBitmap(width, height, bitmapConfig);
+    CloseableReference<Bitmap> bitmap =
+        mBitmapFactory.createBitmapInternal(width, height, bitmapConfig);
     bitmap.get().eraseColor(Color.TRANSPARENT);
     if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.HONEYCOMB_MR1) {
       bitmap.get().setHasAlpha(true);

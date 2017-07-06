@@ -72,6 +72,11 @@ public class AnimatedFrameCache {
     public boolean containsUri(Uri uri) {
       return mImageCacheKey.containsUri(uri);
     }
+
+    @Override
+    public String getUriString() {
+      return null;
+    }
   }
 
   private final CacheKey mImageCacheKey;
@@ -125,6 +130,13 @@ public class AnimatedFrameCache {
   @Nullable
   public CloseableReference<CloseableImage> get(int frameIndex) {
     return mBackingCache.get(keyFor(frameIndex));
+  }
+
+  /**
+   * Check whether the cache contains an image for the given frame index.
+   */
+  public boolean contains(int frameIndex) {
+    return mBackingCache.contains(keyFor(frameIndex));
   }
 
   /**

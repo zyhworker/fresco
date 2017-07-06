@@ -96,9 +96,11 @@ public class StatefulProducerRunnableTest {
     doReturn(true).when(mProducerListener).requiresExtraMap(REQUEST_ID);
     doReturn(mResult).when(mResultSupplier).get();
     mStatefulProducerRunnable.run();
-    verify(mConsumer).onNewResult(mResult, true);
+    verify(mConsumer).onNewResult(mResult, Consumer.IS_LAST);
     verify(mProducerListener).onProducerStart(REQUEST_ID, PRODUCER_NAME);
     verify(mProducerListener).onProducerFinishWithSuccess(REQUEST_ID, PRODUCER_NAME, mSuccessMap);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
     verify(mResult).close();
   }
 
@@ -106,9 +108,11 @@ public class StatefulProducerRunnableTest {
   public void testOnSuccess_noExtraMap() throws IOException {
     doReturn(mResult).when(mResultSupplier).get();
     mStatefulProducerRunnable.run();
-    verify(mConsumer).onNewResult(mResult, true);
+    verify(mConsumer).onNewResult(mResult, Consumer.IS_LAST);
     verify(mProducerListener).onProducerStart(REQUEST_ID, PRODUCER_NAME);
     verify(mProducerListener).onProducerFinishWithSuccess(REQUEST_ID, PRODUCER_NAME, null);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
     verify(mResult).close();
   }
 
@@ -122,6 +126,8 @@ public class StatefulProducerRunnableTest {
         REQUEST_ID,
         PRODUCER_NAME,
         mCancellationMap);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
   }
 
   @Test
@@ -130,6 +136,8 @@ public class StatefulProducerRunnableTest {
     verify(mConsumer).onCancellation();
     verify(mProducerListener).onProducerStart(REQUEST_ID, PRODUCER_NAME);
     verify(mProducerListener).onProducerFinishWithCancellation(REQUEST_ID, PRODUCER_NAME, null);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
   }
 
 
@@ -145,6 +153,8 @@ public class StatefulProducerRunnableTest {
         PRODUCER_NAME,
         mException,
         mFailureMap);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
   }
 
   @Test
@@ -158,5 +168,7 @@ public class StatefulProducerRunnableTest {
         PRODUCER_NAME,
         mException,
         null);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
   }
 }

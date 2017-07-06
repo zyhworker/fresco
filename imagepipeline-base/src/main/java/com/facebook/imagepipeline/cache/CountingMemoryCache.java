@@ -14,8 +14,11 @@ import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.WeakHashMap;
 import java.util.concurrent.TimeUnit;
 
+import android.graphics.Bitmap;
 import android.os.SystemClock;
 
 import com.facebook.common.internal.Preconditions;
@@ -25,6 +28,7 @@ import com.facebook.common.memory.MemoryTrimType;
 import com.facebook.common.memory.MemoryTrimmable;
 import com.facebook.common.references.CloseableReference;
 import com.facebook.common.references.ResourceReleaser;
+import com.facebook.imagepipeline.bitmaps.PlatformBitmapFactory;
 
 import com.android.internal.util.Predicate;
 
@@ -110,6 +114,10 @@ public class CountingMemoryCache<K, V> implements MemoryCache<K, V>, MemoryTrimm
   @VisibleForTesting
   final CountingLruMap<K, Entry<K, V>> mCachedEntries;
 
+  @GuardedBy("this")
+  @VisibleForTesting
+  final Map<Bitmap, Object> mOtherEntries = new WeakHashMap<>();
+
   private final ValueDescriptor<V> mValueDescriptor;
 
   private final CacheTrimStrategy mCacheTrimStrategy;
@@ -124,7 +132,9 @@ public class CountingMemoryCache<K, V> implements MemoryCache<K, V>, MemoryTrimm
   public CountingMemoryCache(
       ValueDescriptor<V> valueDescriptor,
       CacheTrimStrategy cacheTrimStrategy,
-      Supplier<MemoryCacheParams> memoryCacheParamsSupplier) {
+      Supplier<MemoryCacheParams> memoryCacheParamsSupplier,
+      PlatformBitmapFactory platformBitmapFactory,
+      boolean isExternalCreatedBitmapLogEnabled) {
     mValueDescriptor = valueDescriptor;
     mExclusiveEntries = new CountingLruMap<>(wrapValueDescriptor(valueDescriptor));
     mCachedEntries = new CountingLruMap<>(wrapValueDescriptor(valueDescriptor));
@@ -132,6 +142,18 @@ public class CountingMemoryCache<K, V> implements MemoryCache<K, V>, MemoryTrimm
     mMemoryCacheParamsSupplier = memoryCacheParamsSupplier;
     mMemoryCacheParams = mMemoryCacheParamsSupplier.get();
     mLastCacheParamsCheck = SystemClock.uptimeMillis();
+
+    if (isExternalCreatedBitmapLogEnabled) {
+      platformBitmapFactory.setCreationListener(
+          new PlatformBitmapFactory.BitmapCreationObserver() {
+            @Override
+            public void onBitmapCreated(
+                Bitmap bitmap,
+                Object callerContext) {
+              mOtherEntries.put(bitmap, callerContext);
+            }
+          });
+    }
   }
 
   private ValueDescriptor<Entry<K, V>> wrapValueDescriptor(
@@ -340,6 +362,16 @@ public class CountingMemoryCache<K, V> implements MemoryCache<K, V>, MemoryTrimm
   @Override
   public synchronized boolean contains(Predicate<K> predicate) {
     return !mCachedEntries.getMatchingEntries(predicate).isEmpty();
+  }
+
+  /**
+   * Check if an item with the given cache key is currently in the cache.
+   *
+   * @param key returns true if an item with the given key matches
+   * @return true is any items matches from the cache
+   */
+  public synchronized boolean contains(K key) {
+    return mCachedEntries.contains(key);
   }
 
   /** Trims the cache according to the specified trimming strategy and the given trim type. */

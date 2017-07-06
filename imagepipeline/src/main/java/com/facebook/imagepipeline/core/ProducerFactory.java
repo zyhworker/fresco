@@ -9,32 +9,38 @@
 
 package com.facebook.imagepipeline.core;
 
+import javax.annotation.Nullable;
+
 import android.content.ContentResolver;
 import android.content.Context;
 import android.content.res.AssetManager;
 import android.content.res.Resources;
 
 import com.facebook.cache.common.CacheKey;
+import com.facebook.common.memory.ByteArrayPool;
+import com.facebook.common.memory.PooledByteBuffer;
+import com.facebook.common.memory.PooledByteBufferFactory;
 import com.facebook.common.references.CloseableReference;
 import com.facebook.imagepipeline.bitmaps.PlatformBitmapFactory;
 import com.facebook.imagepipeline.cache.BufferedDiskCache;
 import com.facebook.imagepipeline.cache.CacheKeyFactory;
+import com.facebook.imagepipeline.cache.MediaIdExtractor;
+import com.facebook.imagepipeline.cache.MediaVariationsIndex;
 import com.facebook.imagepipeline.cache.MemoryCache;
 import com.facebook.imagepipeline.decoder.ImageDecoder;
 import com.facebook.imagepipeline.decoder.ProgressiveJpegConfig;
 import com.facebook.imagepipeline.image.CloseableImage;
 import com.facebook.imagepipeline.image.EncodedImage;
-import com.facebook.imagepipeline.memory.ByteArrayPool;
-import com.facebook.imagepipeline.memory.PooledByteBuffer;
-import com.facebook.imagepipeline.memory.PooledByteBufferFactory;
 import com.facebook.imagepipeline.producers.AddImageTransformMetaDataProducer;
 import com.facebook.imagepipeline.producers.BitmapMemoryCacheGetProducer;
 import com.facebook.imagepipeline.producers.BitmapMemoryCacheKeyMultiplexProducer;
 import com.facebook.imagepipeline.producers.BitmapMemoryCacheProducer;
+import com.facebook.imagepipeline.producers.BitmapPrepareProducer;
 import com.facebook.imagepipeline.producers.BranchOnSeparateImagesProducer;
 import com.facebook.imagepipeline.producers.DataFetchProducer;
 import com.facebook.imagepipeline.producers.DecodeProducer;
-import com.facebook.imagepipeline.producers.DiskCacheProducer;
+import com.facebook.imagepipeline.producers.DiskCacheReadProducer;
+import com.facebook.imagepipeline.producers.DiskCacheWriteProducer;
 import com.facebook.imagepipeline.producers.EncodedCacheKeyMultiplexProducer;
 import com.facebook.imagepipeline.producers.EncodedMemoryCacheProducer;
 import com.facebook.imagepipeline.producers.LocalAssetFetchProducer;
@@ -44,12 +50,15 @@ import com.facebook.imagepipeline.producers.LocalExifThumbnailProducer;
 import com.facebook.imagepipeline.producers.LocalFileFetchProducer;
 import com.facebook.imagepipeline.producers.LocalResourceFetchProducer;
 import com.facebook.imagepipeline.producers.LocalVideoThumbnailProducer;
+import com.facebook.imagepipeline.producers.MediaVariationsFallbackProducer;
 import com.facebook.imagepipeline.producers.NetworkFetchProducer;
 import com.facebook.imagepipeline.producers.NetworkFetcher;
 import com.facebook.imagepipeline.producers.NullProducer;
+import com.facebook.imagepipeline.producers.PartialDiskCacheProducer;
 import com.facebook.imagepipeline.producers.PostprocessedBitmapMemoryCacheProducer;
 import com.facebook.imagepipeline.producers.PostprocessorProducer;
 import com.facebook.imagepipeline.producers.Producer;
+import com.facebook.imagepipeline.producers.QualifiedResourceFetchProducer;
 import com.facebook.imagepipeline.producers.ResizeAndRotateProducer;
 import com.facebook.imagepipeline.producers.SwallowResultProducer;
 import com.facebook.imagepipeline.producers.ThreadHandoffProducer;
@@ -60,6 +69,9 @@ import com.facebook.imagepipeline.producers.ThumbnailProducer;
 import com.facebook.imagepipeline.producers.WebpTranscodeProducer;
 
 public class ProducerFactory {
+
+  private static final int MAX_SIMULTANEOUS_REQUESTS = 5;
+
   // Local dependencies
   private ContentResolver mContentResolver;
   private Resources mResources;
@@ -71,7 +83,7 @@ public class ProducerFactory {
   private final ProgressiveJpegConfig mProgressiveJpegConfig;
   private final boolean mDownsampleEnabled;
   private final boolean mResizeAndRotateEnabledForNetwork;
-  private final boolean mDecodeFileDescriptorEnabled;
+  private final boolean mDecodeCancellationEnabled;
 
   // Dependencies used by multiple steps
   private final ExecutorSupplier mExecutorSupplier;
@@ -83,7 +95,8 @@ public class ProducerFactory {
   private final MemoryCache<CacheKey, PooledByteBuffer> mEncodedMemoryCache;
   private final MemoryCache<CacheKey, CloseableImage> mBitmapMemoryCache;
   private final CacheKeyFactory mCacheKeyFactory;
-  private final int mForceSmallCacheThresholdBytes;
+  private final MediaVariationsIndex mMediaVariationsIndex;
+  @Nullable private final MediaIdExtractor mMediaIdExtractor;
 
   // Postproc dependencies
   private final PlatformBitmapFactory mPlatformBitmapFactory;
@@ -95,17 +108,17 @@ public class ProducerFactory {
       ProgressiveJpegConfig progressiveJpegConfig,
       boolean downsampleEnabled,
       boolean resizeAndRotateEnabledForNetwork,
+      boolean decodeCancellationEnabled,
       ExecutorSupplier executorSupplier,
       PooledByteBufferFactory pooledByteBufferFactory,
       MemoryCache<CacheKey, CloseableImage> bitmapMemoryCache,
       MemoryCache<CacheKey, PooledByteBuffer> encodedMemoryCache,
       BufferedDiskCache defaultBufferedDiskCache,
       BufferedDiskCache smallImageBufferedDiskCache,
+      MediaVariationsIndex mediaVariationsIndex,
+      @Nullable MediaIdExtractor mediaIdExtractor,
       CacheKeyFactory cacheKeyFactory,
-      PlatformBitmapFactory platformBitmapFactory,
-      boolean decodeFileDescriptorEnabled,
-      int forceSmallCacheThresholdBytes) {
-    mForceSmallCacheThresholdBytes = forceSmallCacheThresholdBytes;
+      PlatformBitmapFactory platformBitmapFactory) {
     mContentResolver = context.getApplicationContext().getContentResolver();
     mResources = context.getApplicationContext().getResources();
     mAssetManager = context.getApplicationContext().getAssets();
@@ -115,6 +128,7 @@ public class ProducerFactory {
     mProgressiveJpegConfig = progressiveJpegConfig;
     mDownsampleEnabled = downsampleEnabled;
     mResizeAndRotateEnabledForNetwork = resizeAndRotateEnabledForNetwork;
+    mDecodeCancellationEnabled = decodeCancellationEnabled;
 
     mExecutorSupplier = executorSupplier;
     mPooledByteBufferFactory = pooledByteBufferFactory;
@@ -123,11 +137,11 @@ public class ProducerFactory {
     mEncodedMemoryCache = encodedMemoryCache;
     mDefaultBufferedDiskCache = defaultBufferedDiskCache;
     mSmallImageBufferedDiskCache = smallImageBufferedDiskCache;
+    mMediaVariationsIndex = mediaVariationsIndex;
+    mMediaIdExtractor = mediaIdExtractor;
     mCacheKeyFactory = cacheKeyFactory;
 
     mPlatformBitmapFactory = platformBitmapFactory;
-
-    mDecodeFileDescriptorEnabled = decodeFileDescriptorEnabled;
   }
 
   public static AddImageTransformMetaDataProducer newAddImageTransformMetaDataProducer(
@@ -157,7 +171,7 @@ public class ProducerFactory {
   }
 
   public DataFetchProducer newDataFetchProducer() {
-    return new DataFetchProducer(mPooledByteBufferFactory, mDecodeFileDescriptorEnabled);
+    return new DataFetchProducer(mPooledByteBufferFactory);
   }
 
   public DecodeProducer newDecodeProducer(Producer<EncodedImage> inputProducer) {
@@ -168,17 +182,49 @@ public class ProducerFactory {
         mProgressiveJpegConfig,
         mDownsampleEnabled,
         mResizeAndRotateEnabledForNetwork,
+        mDecodeCancellationEnabled,
         inputProducer);
   }
 
-  public DiskCacheProducer newDiskCacheProducer(
+  public DiskCacheReadProducer newDiskCacheReadProducer(
       Producer<EncodedImage> inputProducer) {
-    return new DiskCacheProducer(
+    return new DiskCacheReadProducer(
         mDefaultBufferedDiskCache,
         mSmallImageBufferedDiskCache,
         mCacheKeyFactory,
-        inputProducer,
-        mForceSmallCacheThresholdBytes);
+        inputProducer
+    );
+  }
+
+  public DiskCacheWriteProducer newDiskCacheWriteProducer(
+      Producer<EncodedImage> inputProducer) {
+    return new DiskCacheWriteProducer(
+        mDefaultBufferedDiskCache,
+        mSmallImageBufferedDiskCache,
+        mCacheKeyFactory,
+        inputProducer
+    );
+  }
+
+  public MediaVariationsFallbackProducer newMediaVariationsProducer(
+      Producer<EncodedImage> inputProducer) {
+    return new MediaVariationsFallbackProducer(
+        mDefaultBufferedDiskCache,
+        mSmallImageBufferedDiskCache,
+        mCacheKeyFactory,
+        mMediaVariationsIndex,
+        mMediaIdExtractor,
+        inputProducer);
+  }
+
+  public PartialDiskCacheProducer newPartialDiskCacheProducer(
+      Producer<EncodedImage> inputProducer) {
+    return new PartialDiskCacheProducer(
+        mDefaultBufferedDiskCache,
+        mCacheKeyFactory,
+        mPooledByteBufferFactory,
+        mByteArrayPool,
+        inputProducer);
   }
 
   public EncodedCacheKeyMultiplexProducer newEncodedCacheKeyMultiplexProducer(
@@ -200,24 +246,21 @@ public class ProducerFactory {
     return new LocalAssetFetchProducer(
         mExecutorSupplier.forLocalStorageRead(),
         mPooledByteBufferFactory,
-        mAssetManager,
-        mDecodeFileDescriptorEnabled);
+        mAssetManager);
   }
 
   public LocalContentUriFetchProducer newLocalContentUriFetchProducer() {
     return new LocalContentUriFetchProducer(
         mExecutorSupplier.forLocalStorageRead(),
         mPooledByteBufferFactory,
-        mContentResolver,
-        mDecodeFileDescriptorEnabled);
+        mContentResolver);
   }
 
-    public LocalContentUriThumbnailFetchProducer newLocalContentUriThumbnailFetchProducer() {
+  public LocalContentUriThumbnailFetchProducer newLocalContentUriThumbnailFetchProducer() {
     return new LocalContentUriThumbnailFetchProducer(
         mExecutorSupplier.forLocalStorageRead(),
         mPooledByteBufferFactory,
-        mContentResolver,
-        mDecodeFileDescriptorEnabled);
+        mContentResolver);
   }
 
   public LocalExifThumbnailProducer newLocalExifThumbnailProducer() {
@@ -235,16 +278,21 @@ public class ProducerFactory {
   public LocalFileFetchProducer newLocalFileFetchProducer() {
     return new LocalFileFetchProducer(
         mExecutorSupplier.forLocalStorageRead(),
+        mPooledByteBufferFactory);
+  }
+
+  public QualifiedResourceFetchProducer newQualifiedResourceFetchProducer() {
+    return new QualifiedResourceFetchProducer(
+        mExecutorSupplier.forLocalStorageRead(),
         mPooledByteBufferFactory,
-        mDecodeFileDescriptorEnabled);
+        mContentResolver);
   }
 
   public LocalResourceFetchProducer newLocalResourceFetchProducer() {
     return new LocalResourceFetchProducer(
         mExecutorSupplier.forLocalStorageRead(),
         mPooledByteBufferFactory,
-        mResources,
-        mDecodeFileDescriptorEnabled);
+        mResources);
   }
 
   public LocalVideoThumbnailProducer newLocalVideoThumbnailProducer() {
@@ -274,11 +322,16 @@ public class ProducerFactory {
         inputProducer, mPlatformBitmapFactory, mExecutorSupplier.forBackgroundTasks());
   }
 
-  public ResizeAndRotateProducer newResizeAndRotateProducer(Producer<EncodedImage> inputProducer) {
+  public ResizeAndRotateProducer newResizeAndRotateProducer(
+      Producer<EncodedImage> inputProducer,
+      boolean resizingEnabledIfNotDownsampling,
+      boolean useDownsamplingRatio) {
     return new ResizeAndRotateProducer(
         mExecutorSupplier.forBackgroundTasks(),
         mPooledByteBufferFactory,
-        inputProducer);
+        resizingEnabledIfNotDownsampling && !mDownsampleEnabled,
+        inputProducer,
+        useDownsamplingRatio);
   }
 
   public static <T> SwallowResultProducer<T> newSwallowResultProducer(Producer<T> inputProducer) {
@@ -293,10 +346,9 @@ public class ProducerFactory {
   }
 
   public <T> ThrottlingProducer<T> newThrottlingProducer(
-      int maxSimultaneousRequests,
       Producer<T> inputProducer) {
     return new ThrottlingProducer<T>(
-        maxSimultaneousRequests,
+        MAX_SIMULTANEOUS_REQUESTS,
         mExecutorSupplier.forLightweightBackgroundTasks(),
         inputProducer);
   }
@@ -307,5 +359,10 @@ public class ProducerFactory {
         mExecutorSupplier.forBackgroundTasks(),
         mPooledByteBufferFactory,
         inputProducer);
+  }
+
+  public BitmapPrepareProducer newBitmapPrepareProducer(
+      Producer<CloseableReference<CloseableImage>> inputProducer) {
+    return new BitmapPrepareProducer(inputProducer);
   }
 }

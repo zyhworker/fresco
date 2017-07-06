@@ -9,28 +9,28 @@
 
 package com.facebook.imagepipeline.producers;
 
+import javax.annotation.Nullable;
+
 import java.io.File;
 import java.io.IOException;
 import java.util.Map;
 import java.util.concurrent.Executor;
 
 import android.content.ContentResolver;
-import android.database.Cursor;
 import android.media.ExifInterface;
 import android.net.Uri;
-import android.provider.MediaStore;
 import android.util.Pair;
 
 import com.facebook.common.internal.ImmutableMap;
 import com.facebook.common.internal.VisibleForTesting;
+import com.facebook.common.memory.PooledByteBuffer;
+import com.facebook.common.memory.PooledByteBufferFactory;
+import com.facebook.common.memory.PooledByteBufferInputStream;
 import com.facebook.common.references.CloseableReference;
 import com.facebook.common.util.UriUtil;
-import com.facebook.imageformat.ImageFormat;
+import com.facebook.imageformat.DefaultImageFormats;
 import com.facebook.imagepipeline.common.ResizeOptions;
 import com.facebook.imagepipeline.image.EncodedImage;
-import com.facebook.imagepipeline.memory.PooledByteBuffer;
-import com.facebook.imagepipeline.memory.PooledByteBufferFactory;
-import com.facebook.imagepipeline.memory.PooledByteBufferInputStream;
 import com.facebook.imagepipeline.request.ImageRequest;
 import com.facebook.imageutils.BitmapUtil;
 import com.facebook.imageutils.JfifUtil;
@@ -45,7 +45,7 @@ public class LocalExifThumbnailProducer implements ThumbnailProducer<EncodedImag
 
   private static final int COMMON_EXIF_THUMBNAIL_MAX_DIMENSION = 512;
 
-  @VisibleForTesting static final String PRODUCER_NAME = "LocalExifThumbnailProducer";
+  public static final String PRODUCER_NAME = "LocalExifThumbnailProducer";
   @VisibleForTesting static final String CREATED_THUMBNAIL = "createdThumbnail";
 
   private final Executor mExecutor;
@@ -130,10 +130,14 @@ public class LocalExifThumbnailProducer implements ThumbnailProducer<EncodedImag
     mExecutor.execute(cancellableProducerRunnable);
   }
 
-  @VisibleForTesting ExifInterface getExifInterface(Uri uri) throws IOException {
-    final String realPath = getRealPathFromUri(uri);
-    if (canReadAsFile(realPath)) {
+  @VisibleForTesting @Nullable ExifInterface getExifInterface(Uri uri) {
+    final String realPath = UriUtil.getRealPathFromUri(mContentResolver, uri);
+    try {
+      if (canReadAsFile(realPath)) {
         return new ExifInterface(realPath);
+      }
+    } catch (IOException e) {
+      // If we cannot get the exif interface, return null as there is no thumbnail available
     }
     return null;
   }
@@ -153,7 +157,7 @@ public class LocalExifThumbnailProducer implements ThumbnailProducer<EncodedImag
     } finally {
       CloseableReference.closeSafely(closeableByteBuffer);
     }
-    encodedImage.setImageFormat(ImageFormat.JPEG);
+    encodedImage.setImageFormat(DefaultImageFormats.JPEG);
     encodedImage.setRotationAngle(rotationAngle);
     encodedImage.setWidth(width);
     encodedImage.setHeight(height);
@@ -164,33 +168,6 @@ public class LocalExifThumbnailProducer implements ThumbnailProducer<EncodedImag
   private int getRotationAngle(final ExifInterface exifInterface) {
     return JfifUtil.getAutoRotateAngleFromOrientation(
         Integer.parseInt(exifInterface.getAttribute(ExifInterface.TAG_ORIENTATION)));
-  }
-
-  /**
-   * Get the path of a file from the Uri
-   * @param srcUri The source uri
-   * @return The Path for the file or null if doesn't exists
-   */
-  private String getRealPathFromUri(final Uri srcUri) {
-    String result = null;
-    if (UriUtil.isLocalContentUri(srcUri)) {
-      Cursor cursor = null;
-      try {
-        cursor = mContentResolver.query(srcUri, null, null, null, null);
-        if (cursor != null) {
-          cursor.moveToFirst();
-          int idx = cursor.getColumnIndex(MediaStore.Images.ImageColumns.DATA);
-          result = cursor.getString(idx);
-        }
-      } finally {
-        if (cursor != null) {
-          cursor.close();
-        }
-      }
-    } else if (UriUtil.isLocalFileUri(srcUri)) {
-      result = srcUri.getPath();
-    }
-    return result;
   }
 
   @VisibleForTesting boolean canReadAsFile(String realPath) throws IOException {

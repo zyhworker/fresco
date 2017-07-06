@@ -12,38 +12,49 @@
 
 package com.facebook.samples.zoomableapp;
 
-import java.util.HashSet;
-import java.util.Set;
-
 import android.app.Activity;
-import android.graphics.Bitmap;
 import android.os.Bundle;
 import android.support.v4.view.ViewPager;
-
-import com.facebook.common.logging.FLog;
-import com.facebook.drawee.backends.pipeline.Fresco;
-import com.facebook.imagepipeline.core.ImagePipelineConfig;
-import com.facebook.imagepipeline.listener.RequestListener;
-import com.facebook.imagepipeline.listener.RequestLoggingListener;
+import android.view.Menu;
+import android.view.MenuInflater;
+import android.view.MenuItem;
 
 public class MainActivity extends Activity {
+
+  private MyPagerAdapter mAdapter;
 
   @Override
   protected void onCreate(Bundle savedInstanceState) {
     super.onCreate(savedInstanceState);
 
-    FLog.setMinimumLoggingLevel(FLog.VERBOSE);
-    Set<RequestListener> listeners = new HashSet<>();
-    listeners.add(new RequestLoggingListener());
-    ImagePipelineConfig config = ImagePipelineConfig.newBuilder(this)
-        .setRequestListeners(listeners)
-        .setBitmapsConfig(Bitmap.Config.ARGB_8888)
-        .build();
-    Fresco.initialize(this, config);
     setContentView(R.layout.activity_main);
 
-    MyPagerAdapter adapter = new MyPagerAdapter();
     ViewPager pager = (ViewPager) findViewById(R.id.pager);
-    pager.setAdapter(adapter);
+    mAdapter = new MyPagerAdapter(pager.getChildCount());
+
+    pager.setAdapter(mAdapter);
+  }
+
+  @Override
+  public boolean onCreateOptionsMenu(Menu menu) {
+    MenuInflater inflater = getMenuInflater();
+    inflater.inflate(R.menu.menu, menu);
+    return super.onCreateOptionsMenu(menu);
+  }
+
+  @Override
+  public boolean onPrepareOptionsMenu(Menu menu) {
+    menu.findItem(R.id.allow_zoomed_swiping).setChecked(mAdapter.allowsSwipingWhileZoomed());
+    return super.onPrepareOptionsMenu(menu);
+  }
+
+  @Override
+  public boolean onOptionsItemSelected(MenuItem item) {
+    if (item.getItemId() == R.id.allow_zoomed_swiping) {
+      mAdapter.toggleAllowSwipingWhileZoomed();
+      item.setChecked(mAdapter.allowsSwipingWhileZoomed());
+      mAdapter.notifyDataSetChanged();
+    }
+    return super.onOptionsItemSelected(item);
   }
 }

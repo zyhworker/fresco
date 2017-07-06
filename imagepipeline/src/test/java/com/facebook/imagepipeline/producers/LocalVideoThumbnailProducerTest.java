@@ -17,11 +17,11 @@ import android.media.ThumbnailUtils;
 import android.provider.MediaStore;
 
 import com.facebook.common.internal.ImmutableMap;
+import com.facebook.common.memory.PooledByteBufferFactory;
 import com.facebook.common.references.CloseableReference;
 import com.facebook.imagepipeline.common.Priority;
 import com.facebook.imagepipeline.image.CloseableImage;
 import com.facebook.imagepipeline.image.CloseableStaticBitmap;
-import com.facebook.imagepipeline.memory.PooledByteBufferFactory;
 import com.facebook.imagepipeline.request.ImageRequest;
 import com.facebook.imagepipeline.testing.FakeClock;
 import com.facebook.imagepipeline.testing.TestExecutorService;
@@ -53,7 +53,6 @@ import static org.powermock.api.mockito.PowerMockito.*;
 @PowerMockIgnore({ "org.mockito.*", "org.robolectric.*", "android.*" })
 @PrepareForTest(android.media.ThumbnailUtils.class)
 @Config(manifest= Config.NONE)
-@Ignore
 public class LocalVideoThumbnailProducerTest {
   private static final String PRODUCER_NAME = LocalVideoThumbnailProducer.PRODUCER_NAME;
   private static final String TEST_FILENAME = "dummy.jpg";
@@ -100,6 +99,8 @@ public class LocalVideoThumbnailProducerTest {
     mProducerContext.cancel();
     verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
     verify(mProducerListener).onProducerFinishWithCancellation(mRequestId, PRODUCER_NAME, null);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
     verify(mConsumer).onCancellation();
   }
 
@@ -118,7 +119,7 @@ public class LocalVideoThumbnailProducerTest {
             mCloseableReference = ((CloseableReference) invocation.getArguments()[0]).clone();
             return null;
           }
-        }).when(mConsumer).onNewResult(any(CloseableReference.class), eq(true));
+        }).when(mConsumer).onNewResult(any(CloseableReference.class), eq(Consumer.IS_LAST));
     mLocalVideoThumbnailProducer.produceResults(mConsumer, mProducerContext);
     mExecutor.runUntilIdle();
     assertEquals(1, mCloseableReference.getUnderlyingReferenceTestOnly().getRefCountTestOnly());
@@ -127,6 +128,7 @@ public class LocalVideoThumbnailProducerTest {
         mCloseableReference.getUnderlyingReferenceTestOnly().get().getUnderlyingBitmap());
     verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
     verify(mProducerListener).onProducerFinishWithSuccess(mRequestId, PRODUCER_NAME, null);
+    verify(mProducerListener).onUltimateProducerReached(mRequestId, PRODUCER_NAME, true);
   }
 
   @Test
@@ -143,7 +145,7 @@ public class LocalVideoThumbnailProducerTest {
             mCloseableReference = ((CloseableReference) invocation.getArguments()[0]).clone();
             return null;
           }
-        }).when(mConsumer).onNewResult(any(CloseableReference.class), eq(true));
+        }).when(mConsumer).onNewResult(any(CloseableReference.class), eq(Consumer.IS_LAST));
     mLocalVideoThumbnailProducer.produceResults(mConsumer, mProducerContext);
     mExecutor.runUntilIdle();
     assertEquals(1, mCloseableReference.getUnderlyingReferenceTestOnly().getRefCountTestOnly());
@@ -155,6 +157,7 @@ public class LocalVideoThumbnailProducerTest {
         ImmutableMap.of(LocalVideoThumbnailProducer.CREATED_THUMBNAIL, "true");
     verify(mProducerListener).onProducerFinishWithSuccess(
         mRequestId, PRODUCER_NAME, thumbnailFoundMap);
+    verify(mProducerListener).onUltimateProducerReached(mRequestId, PRODUCER_NAME, true);
   }
 
   @Test
@@ -166,12 +169,13 @@ public class LocalVideoThumbnailProducerTest {
         .thenReturn(null);
     mLocalVideoThumbnailProducer.produceResults(mConsumer, mProducerContext);
     mExecutor.runUntilIdle();
-    verify(mConsumer).onNewResult(null, true);
+    verify(mConsumer).onNewResult(null, Consumer.IS_LAST);
     verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
     Map<String, String> thumbnailNotFoundMap =
         ImmutableMap.of(LocalVideoThumbnailProducer.CREATED_THUMBNAIL, "false");
     verify(mProducerListener).onProducerFinishWithSuccess(
         mRequestId, PRODUCER_NAME, thumbnailNotFoundMap);
+    verify(mProducerListener).onUltimateProducerReached(mRequestId, PRODUCER_NAME, false);
   }
 
   @Test(expected = RuntimeException.class)
@@ -184,6 +188,7 @@ public class LocalVideoThumbnailProducerTest {
     verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
     verify(mProducerListener).onProducerFinishWithFailure(
         mRequestId, PRODUCER_NAME, mException, null);
+    verify(mProducerListener).onUltimateProducerReached(mRequestId, PRODUCER_NAME, false);
   }
 
   @After

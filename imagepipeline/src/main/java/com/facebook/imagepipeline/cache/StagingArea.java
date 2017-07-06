@@ -16,12 +16,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import com.facebook.cache.common.CacheKey;
 import com.facebook.common.internal.Preconditions;
 import com.facebook.common.logging.FLog;
+import com.facebook.common.memory.PooledByteBuffer;
 import com.facebook.common.references.CloseableReference;
 import com.facebook.imagepipeline.image.EncodedImage;
-import com.facebook.imagepipeline.memory.PooledByteBuffer;
-import com.facebook.cache.common.CacheKey;
 
 /**
  * This is class encapsulates Map that maps ImageCacheKeys to EncodedImages pointing to
@@ -148,7 +148,7 @@ public class StagingArea {
               TAG,
               "Found closed reference %d for key %s (%d)",
               System.identityHashCode(storedEncodedImage),
-              key.toString(),
+              key.getUriString(),
               System.identityHashCode(key));
           return null;
         }
@@ -177,7 +177,7 @@ public class StagingArea {
             TAG,
             "Found closed reference %d for key %s (%d)",
             System.identityHashCode(storedEncodedImage),
-            key.toString(),
+            key.getUriString(),
             System.identityHashCode(key));
         return false;
       }

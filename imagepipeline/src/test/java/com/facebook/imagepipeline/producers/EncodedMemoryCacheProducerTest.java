@@ -19,11 +19,11 @@ import com.facebook.cache.common.CacheKey;
 import com.facebook.cache.common.MultiCacheKey;
 import com.facebook.cache.common.SimpleCacheKey;
 import com.facebook.common.internal.ImmutableMap;
+import com.facebook.common.memory.PooledByteBuffer;
 import com.facebook.common.references.CloseableReference;
 import com.facebook.imagepipeline.cache.CacheKeyFactory;
 import com.facebook.imagepipeline.cache.MemoryCache;
 import com.facebook.imagepipeline.image.EncodedImage;
-import com.facebook.imagepipeline.memory.PooledByteBuffer;
 import com.facebook.imagepipeline.request.ImageRequest;
 
 import org.junit.*;
@@ -34,6 +34,7 @@ import org.mockito.stubbing.*;
 import org.robolectric.*;
 import org.robolectric.annotation.*;
 
+import static org.junit.Assert.assertEquals;
 import static org.mockito.Matchers.eq;
 import static org.mockito.Mockito.any;
 import static org.mockito.Mockito.*;
@@ -56,6 +57,7 @@ public class EncodedMemoryCacheProducerTest {
   @Mock public Consumer mConsumer;
   @Mock public ProducerContext mProducerContext;
   @Mock public ImageRequest mImageRequest;
+  @Mock public Object mCallerContext;
   @Mock public ProducerListener mProducerListener;
   @Mock public Exception mException;
   private MultiCacheKey mCacheKey;
@@ -86,10 +88,11 @@ public class EncodedMemoryCacheProducerTest {
     List<CacheKey> list = new ArrayList<>();
     list.add(new SimpleCacheKey("http://dummy.uri"));
     mCacheKey = new MultiCacheKey(list);
-    when(mCacheKeyFactory.getEncodedCacheKey(mImageRequest)).thenReturn(mCacheKey);
+    when(mCacheKeyFactory.getEncodedCacheKey(mImageRequest, mCallerContext)).thenReturn(mCacheKey);
 
     when(mMemoryCache.cache(mCacheKey, mFinalImageReference)).thenReturn(mFinalImageReferenceClone);
     when(mProducerContext.getImageRequest()).thenReturn(mImageRequest);
+    when(mProducerContext.getCallerContext()).thenReturn(mCallerContext);
     when(mProducerContext.getListener()).thenReturn(mProducerListener);
     when(mProducerListener.requiresExtraMap(mRequestId)).thenReturn(true);
     when(mProducerContext.getId()).thenReturn(mRequestId);
@@ -105,14 +108,16 @@ public class EncodedMemoryCacheProducerTest {
         .thenReturn(ImageRequest.RequestLevel.ENCODED_MEMORY_CACHE);
     mEncodedMemoryCacheProducer.produceResults(mConsumer, mProducerContext);
     ArgumentCaptor<EncodedImage> argumentCaptor = ArgumentCaptor.forClass(EncodedImage.class);
-    verify(mConsumer).onNewResult(argumentCaptor.capture(), eq(true));
+    verify(mConsumer).onNewResult(argumentCaptor.capture(), eq(Consumer.IS_LAST));
     EncodedImage encodedImage = argumentCaptor.getValue();
     Assert.assertSame(
         mFinalEncodedImage.getUnderlyingReferenceTestOnly(),
         encodedImage.getUnderlyingReferenceTestOnly());
     verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
-    Map<String, String> extraMap = ImmutableMap.of(EncodedMemoryCacheProducer.VALUE_FOUND, "true");
+    Map<String, String> extraMap =
+        ImmutableMap.of(EncodedMemoryCacheProducer.EXTRA_CACHED_VALUE_FOUND, "true");
     verify(mProducerListener).onProducerFinishWithSuccess(mRequestId, PRODUCER_NAME, extraMap);
+    verify(mProducerListener).onUltimateProducerReached(mRequestId, PRODUCER_NAME, true);
     Assert.assertFalse(mFinalImageReference.isValid());
   }
 
@@ -130,12 +135,44 @@ public class EncodedMemoryCacheProducerTest {
     Assert.assertSame(
         mFinalImageReference.getUnderlyingReferenceTestOnly(),
         capturedRef.getUnderlyingReferenceTestOnly());
-    verify(mConsumer).onNewResult(mIntermediateEncodedImage, false);
-    verify(mConsumer).onNewResult(mFinalEncodedImage, true);
+    verify(mConsumer).onNewResult(mIntermediateEncodedImage, Consumer.NO_FLAGS);
+    verify(mConsumer).onNewResult(mFinalEncodedImage, Consumer.IS_LAST);
     Assert.assertTrue(EncodedImage.isValid(mFinalEncodedImageClone));
     verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
-    Map<String, String> extraMap = ImmutableMap.of(EncodedMemoryCacheProducer.VALUE_FOUND, "false");
+    Map<String, String> extraMap =
+        ImmutableMap.of(EncodedMemoryCacheProducer.EXTRA_CACHED_VALUE_FOUND, "false");
     verify(mProducerListener).onProducerFinishWithSuccess(mRequestId, PRODUCER_NAME, extraMap);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
+  }
+
+  @Test
+  public void testEncodedMemoryCacheGetNotFoundInputProducerSuccessButResultNotCacheable() {
+    testInputProducerSuccessButResultNotCacheableDueToStatusFlags(Consumer.DO_NOT_CACHE_ENCODED);
+  }
+
+  @Test
+  public void testEncodedMemoryCacheGetNotFoundInputProducerSuccessButResultIsPartial() {
+    testInputProducerSuccessButResultNotCacheableDueToStatusFlags(Consumer.IS_PARTIAL_RESULT);
+  }
+
+  private void testInputProducerSuccessButResultNotCacheableDueToStatusFlags(
+      final @Consumer.Status int statusFlags) {
+    setupInputProducerStreamingSuccessWithStatusFlags(statusFlags);
+    mEncodedMemoryCacheProducer.produceResults(mConsumer, mProducerContext);
+
+    verify(mMemoryCache, never()).cache(any(CacheKey.class), any(CloseableReference.class));
+    verify(mConsumer)
+        .onNewResult(mIntermediateEncodedImage, statusFlags);
+    verify(mConsumer)
+        .onNewResult(mFinalEncodedImage, Consumer.IS_LAST | statusFlags);
+    Assert.assertTrue(EncodedImage.isValid(mFinalEncodedImageClone));
+    verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
+    Map<String, String> extraMap =
+        ImmutableMap.of(EncodedMemoryCacheProducer.EXTRA_CACHED_VALUE_FOUND, "false");
+    verify(mProducerListener).onProducerFinishWithSuccess(mRequestId, PRODUCER_NAME, extraMap);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
   }
 
   @Test
@@ -143,10 +180,13 @@ public class EncodedMemoryCacheProducerTest {
     setupEncodedMemoryCacheGetNotFound();
     setupInputProducerNotFound();
     mEncodedMemoryCacheProducer.produceResults(mConsumer, mProducerContext);
-    verify(mConsumer).onNewResult(null, true);
+    verify(mConsumer).onNewResult(null, Consumer.IS_LAST);
     verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
-    Map<String, String> extraMap = ImmutableMap.of(EncodedMemoryCacheProducer.VALUE_FOUND, "false");
+    Map<String, String> extraMap =
+        ImmutableMap.of(EncodedMemoryCacheProducer.EXTRA_CACHED_VALUE_FOUND, "false");
     verify(mProducerListener).onProducerFinishWithSuccess(mRequestId, PRODUCER_NAME, extraMap);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
   }
 
   @Test
@@ -156,8 +196,11 @@ public class EncodedMemoryCacheProducerTest {
     mEncodedMemoryCacheProducer.produceResults(mConsumer, mProducerContext);
     verify(mConsumer).onFailure(mException);
     verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
-    Map<String, String> extraMap = ImmutableMap.of(EncodedMemoryCacheProducer.VALUE_FOUND, "false");
+    Map<String, String> extraMap =
+        ImmutableMap.of(EncodedMemoryCacheProducer.EXTRA_CACHED_VALUE_FOUND, "false");
     verify(mProducerListener).onProducerFinishWithSuccess(mRequestId, PRODUCER_NAME, extraMap);
+    verify(mProducerListener, never())
+        .onUltimateProducerReached(anyString(), anyString(), anyBoolean());
   }
 
   @Test
@@ -166,10 +209,12 @@ public class EncodedMemoryCacheProducerTest {
     when(mProducerContext.getLowestPermittedRequestLevel())
         .thenReturn(ImageRequest.RequestLevel.ENCODED_MEMORY_CACHE);
     mEncodedMemoryCacheProducer.produceResults(mConsumer, mProducerContext);
-    verify(mConsumer).onNewResult(null, true);
+    verify(mConsumer).onNewResult(null, Consumer.IS_LAST);
     verify(mProducerListener).onProducerStart(mRequestId, PRODUCER_NAME);
-    Map<String, String> extraMap = ImmutableMap.of(EncodedMemoryCacheProducer.VALUE_FOUND, "false");
+    Map<String, String> extraMap =
+        ImmutableMap.of(EncodedMemoryCacheProducer.EXTRA_CACHED_VALUE_FOUND, "false");
     verify(mProducerListener).onProducerFinishWithSuccess(mRequestId, PRODUCER_NAME, extraMap);
+    verify(mProducerListener).onUltimateProducerReached(mRequestId, PRODUCER_NAME, false);
     verifyNoMoreInteractions(mInputProducer);
   }
 
@@ -182,15 +227,19 @@ public class EncodedMemoryCacheProducerTest {
   }
 
   private void setupInputProducerStreamingSuccess() {
+    setupInputProducerStreamingSuccessWithStatusFlags(0);
+  }
+
+  private void setupInputProducerStreamingSuccessWithStatusFlags(@Consumer.Status int statusFlags) {
     doAnswer(new ProduceResultsNewResultAnswer(
-            Arrays.asList(mIntermediateEncodedImage, mFinalEncodedImage)))
+            Arrays.asList(mIntermediateEncodedImage, mFinalEncodedImage), statusFlags))
         .when(mInputProducer).produceResults(any(Consumer.class), eq(mProducerContext));
   }
 
   private void setupInputProducerNotFound() {
     final List<EncodedImage> nullArray = new ArrayList<EncodedImage>(1);
     nullArray.add(null);
-    doAnswer(new ProduceResultsNewResultAnswer(nullArray))
+    doAnswer(new ProduceResultsNewResultAnswer(nullArray, 0))
         .when(mInputProducer).produceResults(any(Consumer.class), eq(mProducerContext));
   }
 
@@ -201,9 +250,11 @@ public class EncodedMemoryCacheProducerTest {
 
   private static class ProduceResultsNewResultAnswer implements Answer<Void> {
     private final List<EncodedImage> mResults;
+    private final @Consumer.Status int mExtraStatusFlags;
 
-    private ProduceResultsNewResultAnswer(List<EncodedImage> results) {
+    private ProduceResultsNewResultAnswer(List<EncodedImage> results, int extraStatusFlags) {
       mResults = results;
+      mExtraStatusFlags = extraStatusFlags;
     }
 
     @Override
@@ -212,7 +263,9 @@ public class EncodedMemoryCacheProducerTest {
       Iterator<EncodedImage> iterator = mResults.iterator();
       while (iterator.hasNext()) {
         EncodedImage result = iterator.next();
-        consumer.onNewResult(result, !iterator.hasNext());
+        consumer.onNewResult(
+            result,
+            BaseConsumer.simpleStatusForIsLast(!iterator.hasNext()) | mExtraStatusFlags);
       }
       return null;
     }

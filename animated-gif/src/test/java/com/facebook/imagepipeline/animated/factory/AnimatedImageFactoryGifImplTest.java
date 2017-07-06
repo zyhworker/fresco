@@ -13,6 +13,8 @@ package com.facebook.imagepipeline.animated.factory;
 import android.graphics.Bitmap;
 import android.graphics.Rect;
 
+import com.facebook.animated.gif.GifImage;
+import com.facebook.common.memory.PooledByteBuffer;
 import com.facebook.common.references.CloseableReference;
 import com.facebook.common.references.ResourceReleaser;
 import com.facebook.common.soloader.SoLoaderShim;
@@ -26,21 +28,18 @@ import com.facebook.imagepipeline.bitmaps.PlatformBitmapFactory;
 import com.facebook.imagepipeline.common.ImageDecodeOptions;
 import com.facebook.imagepipeline.image.CloseableAnimatedImage;
 import com.facebook.imagepipeline.image.EncodedImage;
-import com.facebook.imagepipeline.memory.PooledByteBuffer;
 import com.facebook.imagepipeline.testing.MockBitmapFactory;
 import com.facebook.imagepipeline.testing.TrivialPooledByteBuffer;
-import com.facebook.animated.gif.GifImage;
-
-import org.junit.Rule;
-import org.powermock.core.classloader.annotations.PowerMockIgnore;
-import org.powermock.modules.junit4.rule.PowerMockRule;
-import org.robolectric.RobolectricTestRunner;
 
 import org.junit.Before;
+import org.junit.Rule;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.powermock.api.mockito.PowerMockito;
+import org.powermock.core.classloader.annotations.PowerMockIgnore;
 import org.powermock.core.classloader.annotations.PrepareOnlyThisForTest;
+import org.powermock.modules.junit4.rule.PowerMockRule;
+import org.robolectric.RobolectricTestRunner;
 
 import static org.junit.Assert.*;
 import static org.mockito.Mockito.*;
@@ -153,7 +152,7 @@ public class AnimatedImageFactoryGifImplTest {
         any(AnimatedImageResult.class),
         isNull(Rect.class)))
         .thenReturn(mockAnimatedDrawableBackend);
-    when(mMockBitmapFactory.createBitmap(50, 50, DEFAULT_BITMAP_CONFIG))
+    when(mMockBitmapFactory.createBitmapInternal(50, 50, DEFAULT_BITMAP_CONFIG))
         .thenReturn(CloseableReference.of(mockBitmap, FAKE_BITMAP_RESOURCE_RELEASER));
     AnimatedImageCompositor mockCompositor = mock(AnimatedImageCompositor.class);
     PowerMockito.whenNew(AnimatedImageCompositor.class)
@@ -183,7 +182,7 @@ public class AnimatedImageFactoryGifImplTest {
         any(AnimatedImageResult.class),
         isNull(Rect.class));
     verifyNoMoreInteractions(mMockAnimatedDrawableBackendProvider);
-    verify(mMockBitmapFactory).createBitmap(50, 50, DEFAULT_BITMAP_CONFIG);
+    verify(mMockBitmapFactory).createBitmapInternal(50, 50, DEFAULT_BITMAP_CONFIG);
     verifyNoMoreInteractions(mMockBitmapFactory);
     verify(mockCompositor).renderFrame(0, mockBitmap);
   }
@@ -212,7 +211,7 @@ public class AnimatedImageFactoryGifImplTest {
             isNull(Rect.class)))
         .thenReturn(mockAnimatedDrawableBackend);
 
-    when(mMockBitmapFactory.createBitmap(50, 50, DEFAULT_BITMAP_CONFIG))
+    when(mMockBitmapFactory.createBitmapInternal(50, 50, DEFAULT_BITMAP_CONFIG))
         .thenReturn(CloseableReference.of(mockBitmap1, FAKE_BITMAP_RESOURCE_RELEASER))
         .thenReturn(CloseableReference.of(mockBitmap2, FAKE_BITMAP_RESOURCE_RELEASER));
     AnimatedImageCompositor mockCompositor = mock(AnimatedImageCompositor.class);
@@ -247,7 +246,7 @@ public class AnimatedImageFactoryGifImplTest {
         any(AnimatedImageResult.class),
         isNull(Rect.class));
     verifyNoMoreInteractions(mMockAnimatedDrawableBackendProvider);
-    verify(mMockBitmapFactory, times(2)).createBitmap(50, 50, DEFAULT_BITMAP_CONFIG);
+    verify(mMockBitmapFactory, times(2)).createBitmapInternal(50, 50, DEFAULT_BITMAP_CONFIG);
     verifyNoMoreInteractions(mMockBitmapFactory);
     verify(mockCompositor).renderFrame(0, mockBitmap1);
     verify(mockCompositor).renderFrame(1, mockBitmap2);

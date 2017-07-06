@@ -34,7 +34,7 @@ import com.facebook.imagepipeline.request.ImageRequest;
 public class LocalVideoThumbnailProducer implements
     Producer<CloseableReference<CloseableImage>> {
 
-  @VisibleForTesting static final String PRODUCER_NAME = "VideoThumbnailProducer";
+  public static final String PRODUCER_NAME = "VideoThumbnailProducer";
   @VisibleForTesting static final String CREATED_THUMBNAIL = "createdThumbnail";
 
   private final Executor mExecutor;
@@ -57,6 +57,18 @@ public class LocalVideoThumbnailProducer implements
             listener,
             PRODUCER_NAME,
             requestId) {
+          @Override
+          protected void onSuccess(CloseableReference<CloseableImage> result) {
+            super.onSuccess(result);
+            listener.onUltimateProducerReached(requestId, PRODUCER_NAME, result != null);
+          }
+
+          @Override
+          protected void onFailure(Exception e) {
+            super.onFailure(e);
+            listener.onUltimateProducerReached(requestId, PRODUCER_NAME, false);
+          }
+
           @Override
           protected CloseableReference<CloseableImage> getResult() throws Exception {
             Bitmap thumbnailBitmap = ThumbnailUtils.createVideoThumbnail(

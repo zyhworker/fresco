@@ -9,17 +9,22 @@
 
 package com.facebook.imagepipeline.request;
 
+import javax.annotation.Nullable;
+
 import android.net.Uri;
 
 import com.facebook.common.internal.Preconditions;
 import com.facebook.common.util.UriUtil;
+import com.facebook.imagepipeline.common.BytesRange;
 import com.facebook.imagepipeline.common.ImageDecodeOptions;
 import com.facebook.imagepipeline.common.Priority;
 import com.facebook.imagepipeline.common.ResizeOptions;
+import com.facebook.imagepipeline.common.RotationOptions;
+import com.facebook.imagepipeline.core.ImagePipelineConfig;
+import com.facebook.imagepipeline.core.ImagePipelineExperiments;
+import com.facebook.imagepipeline.listener.RequestListener;
 
-import javax.annotation.Nullable;
-
-import static com.facebook.imagepipeline.request.ImageRequest.ImageType;
+import static com.facebook.imagepipeline.request.ImageRequest.CacheChoice;
 import static com.facebook.imagepipeline.request.ImageRequest.RequestLevel;
 
 /**
@@ -29,15 +34,19 @@ public class ImageRequestBuilder {
 
   private Uri mSourceUri = null;
   private RequestLevel mLowestPermittedRequestLevel = RequestLevel.FULL_FETCH;
-  private boolean mAutoRotateEnabled = false;
   private @Nullable ResizeOptions mResizeOptions = null;
+  private @Nullable RotationOptions mRotationOptions = null;
   private ImageDecodeOptions mImageDecodeOptions = ImageDecodeOptions.defaults();
-  private ImageType mImageType = ImageType.DEFAULT;
-  private boolean mProgressiveRenderingEnabled = false;
+  private CacheChoice mCacheChoice = CacheChoice.DEFAULT;
+  private boolean mProgressiveRenderingEnabled =
+      ImagePipelineConfig.getDefaultImageRequestConfig().isProgressiveRenderingEnabled();
   private boolean mLocalThumbnailPreviewsEnabled = false;
   private Priority mRequestPriority = Priority.HIGH;
   private @Nullable Postprocessor mPostprocessor = null;
   private boolean mDiskCacheEnabled = true;
+  private @Nullable RequestListener mRequestListener;
+  private @Nullable MediaVariations mMediaVariations = null;
+  private @Nullable BytesRange mBytesRange = null;
 
   /**
    * Creates a new request builder instance. The setting will be done according to the source type.
@@ -65,30 +74,29 @@ public class ImageRequestBuilder {
    * @return a new request builder instance.
    */
   public static ImageRequestBuilder newBuilderWithResourceId(int resId) {
-    Uri uri = new Uri.Builder()
-        .scheme(UriUtil.LOCAL_RESOURCE_SCHEME)
-        .path(String.valueOf(resId))
-        .build();
-
-    return newBuilderWithSource(uri);
+    return newBuilderWithSource(UriUtil.getUriForResourceId(resId));
   }
 
   /**
    * Creates a new request builder instance with the same parameters as the imageRequest passed in.
+   *
    * @param imageRequest the ImageRequest from where to copy the parameters to the builder.
    * @return a new request builder instance
    */
   public static ImageRequestBuilder fromRequest(ImageRequest imageRequest) {
     return ImageRequestBuilder.newBuilderWithSource(imageRequest.getSourceUri())
-        .setAutoRotateEnabled(imageRequest.getAutoRotateEnabled())
         .setImageDecodeOptions(imageRequest.getImageDecodeOptions())
-        .setImageType(imageRequest.getImageType())
+        .setBytesRange(imageRequest.getBytesRange())
+        .setCacheChoice(imageRequest.getCacheChoice())
         .setLocalThumbnailPreviewsEnabled(imageRequest.getLocalThumbnailPreviewsEnabled())
         .setLowestPermittedRequestLevel(imageRequest.getLowestPermittedRequestLevel())
+        .setMediaVariations(imageRequest.getMediaVariations())
         .setPostprocessor(imageRequest.getPostprocessor())
         .setProgressiveRenderingEnabled(imageRequest.getProgressiveRenderingEnabled())
         .setRequestPriority(imageRequest.getPriority())
-        .setResizeOptions(imageRequest.getResizeOptions());
+        .setResizeOptions(imageRequest.getResizeOptions())
+        .setRequestListener(imageRequest.getRequestListener())
+        .setRotationOptions(imageRequest.getRotationOptions());
   }
 
   private ImageRequestBuilder() {
@@ -113,6 +121,39 @@ public class ImageRequestBuilder {
   }
 
   /**
+   * Sets details of variations of the piece of media which might allow the request to be satisfied
+   * (either as a placeholder or ultimate result) by a cached image at another size.
+   *
+   * <p><i>Experimental.</i> This is now functional but the behaviour is still being tested.
+   * @param mediaVariations the variations of image which relate to the same original media
+   * @return the updated builder instance
+   */
+  public ImageRequestBuilder setMediaVariations(MediaVariations mediaVariations) {
+    mMediaVariations = mediaVariations;
+    return this;
+  }
+
+  /**
+   * Sets a media ID for variations of the piece of media which might allow the request to be
+   * satisfied (either as a placeholder or ultimate result) by a cached image at another size.
+   *
+   * <p><i>Experimental.</i> This is now functional but the behaviour is still being tested.
+   * @see #setMediaVariations(MediaVariations)
+   * @param mediaId the unique ID for this piece of media. This must be non-null and unique for
+   *                this piece of media (i.e. another request for the same picture at a different
+   *                size should share the ID but not an unrelated image and not the same media at
+   *                a different orientation).
+   * @return the updated builder instance
+   */
+  public ImageRequestBuilder setMediaVariationsForMediaId(String mediaId) {
+    return setMediaVariations(MediaVariations.forMediaId(mediaId));
+  }
+
+  public @Nullable MediaVariations getMediaVariations() {
+    return mMediaVariations;
+  }
+
+  /**
    * Sets the lowest level that is permitted to request the image from.
    * @param requestLevel the lowest request level that is allowed
    * @return the updated builder instance
@@ -131,15 +172,15 @@ public class ImageRequestBuilder {
    * Enables or disables auto-rotate for the image in case image has orientation.
    * @return the updated builder instance
    * @param enabled
+   * @deprecated Use #setRotationOptions(RotationOptions)
    */
+  @Deprecated
   public ImageRequestBuilder setAutoRotateEnabled(boolean enabled) {
-    mAutoRotateEnabled = enabled;
-    return this;
-  }
-
-  /** Returns whether auto-rotate is enabled. */
-  public boolean isAutoRotateEnabled() {
-    return mAutoRotateEnabled;
+    if (enabled) {
+      return setRotationOptions(RotationOptions.autoRotate());
+    } else {
+      return setRotationOptions(RotationOptions.disableRotation());
+    }
   }
 
   /**
@@ -147,7 +188,7 @@ public class ImageRequestBuilder {
    * @param resizeOptions resize options
    * @return the modified builder instance
    */
-  public ImageRequestBuilder setResizeOptions(ResizeOptions resizeOptions) {
+  public ImageRequestBuilder setResizeOptions(@Nullable ResizeOptions resizeOptions) {
     mResizeOptions = resizeOptions;
     return this;
   }
@@ -155,6 +196,48 @@ public class ImageRequestBuilder {
   /** Gets the resize options if set, null otherwise. */
   public @Nullable ResizeOptions getResizeOptions() {
     return mResizeOptions;
+  }
+
+  /**
+   * Sets rotation options for the image, whether to rotate by a multiple of 90 degrees, use the
+   * EXIF metadata (relevant to JPEGs only) or to not rotate. This also specifies whether the
+   * rotation should be left until the bitmap is rendered (as the GPU can do this more efficiently
+   * than the effort to change the bitmap object).
+   *
+   * @param rotationOptions rotation options
+   * @return the modified builder instance
+   */
+  public ImageRequestBuilder setRotationOptions(@Nullable RotationOptions rotationOptions) {
+    mRotationOptions = rotationOptions;
+    return this;
+  }
+
+  /** Gets the rotation options if set, null otherwise. */
+  public @Nullable RotationOptions getRotationOptions() {
+    return mRotationOptions;
+  }
+
+  /**
+   * Set the range of bytes to request from the network (in the case of an HTTP request). This is
+   * only used if {@link ImagePipelineExperiments#isPartialImageCachingEnabled()} is true and your
+   * {@link com.facebook.imagepipeline.producers.NetworkFetcher} makes use of it.
+   *
+   * <p> Even where this is supported, there is no contract that this must be followed. The response
+   * may contain the full image data, more than is requested or less, depending on what's already in
+   * cache and external factors.
+   *
+   * @param bytesRange the range of bytes
+   * @return the modified builder instance
+   */
+  public ImageRequestBuilder setBytesRange(@Nullable BytesRange bytesRange) {
+    mBytesRange = bytesRange;
+    return this;
+  }
+
+  /** Gets the range of bytes if set, null otherwise. */
+  @Nullable
+  public BytesRange getBytesRange() {
+    return mBytesRange;
   }
 
   public ImageRequestBuilder setImageDecodeOptions(ImageDecodeOptions imageDecodeOptions) {
@@ -167,19 +250,19 @@ public class ImageRequestBuilder {
   }
 
   /**
-   * Sets the image type. Pipeline might use different caches and eviction policies for each
+   * Sets the cache option. Pipeline might use different caches and eviction policies for each
    * image type.
-   * @param imageType the image type to set
+   * @param cacheChoice the cache choice to set
    * @return the modified builder instance
    */
-  public ImageRequestBuilder setImageType(ImageType imageType) {
-    mImageType = imageType;
+  public ImageRequestBuilder setCacheChoice(ImageRequest.CacheChoice cacheChoice) {
+    mCacheChoice = cacheChoice;
     return this;
   }
 
-  /** Gets the image type (profile image or default). */
-  public ImageType getImageType() {
-    return mImageType;
+  /** Gets the cache choice (profile image or default). */
+  public CacheChoice getCacheChoice() {
+    return mCacheChoice;
   }
 
   /**
@@ -241,6 +324,7 @@ public class ImageRequestBuilder {
   /**
    * Sets the postprocessor.
    * @param postprocessor postprocessor to postprocess the output bitmap with.
+   * @return the modified builder instance
    */
   public ImageRequestBuilder setPostprocessor(Postprocessor postprocessor) {
     mPostprocessor = postprocessor;
@@ -250,6 +334,25 @@ public class ImageRequestBuilder {
   /** Gets postprocessor if set, null otherwise. */
   public @Nullable Postprocessor getPostprocessor() {
     return mPostprocessor;
+  }
+
+  /**
+   * Sets a request listener to use for just this image request
+   *
+   * @param requestListener a request listener to use in addition to the global ones set in the
+   * {@link com.facebook.imagepipeline.core.ImagePipelineConfig}
+   * @return the modified builder instance
+   */
+  public ImageRequestBuilder setRequestListener(RequestListener requestListener) {
+    mRequestListener = requestListener;
+    return this;
+  }
+
+  /**
+   * @return the additional request listener to use for this image request
+   */
+  public @Nullable RequestListener getRequestListener() {
+    return mRequestListener;
   }
 
   /**

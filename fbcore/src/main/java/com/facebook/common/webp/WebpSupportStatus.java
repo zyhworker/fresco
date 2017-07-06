@@ -26,17 +26,22 @@ public class WebpSupportStatus {
 
   public static WebpBitmapFactory sWebpBitmapFactory = null;
 
-  public static boolean sWebpLibraryPresent = false;
+  private static boolean sWebpLibraryChecked = false;
 
-  static {
+  public static WebpBitmapFactory loadWebpBitmapFactoryIfExists() {
+    if (sWebpLibraryChecked) {
+      return sWebpBitmapFactory;
+    }
+    WebpBitmapFactory loadedWebpBitmapFactory = null;
     try {
-      sWebpBitmapFactory = (WebpBitmapFactory) Class
+      loadedWebpBitmapFactory = (WebpBitmapFactory) Class
           .forName("com.facebook.webpsupport.WebpBitmapFactoryImpl")
           .newInstance();
-      sWebpLibraryPresent = true;
     } catch (Throwable e) {
-      sWebpLibraryPresent = false;
+      // Head in the sand
     }
+    sWebpLibraryChecked = true;
+    return loadedWebpBitmapFactory;
   }
 
   /**
@@ -116,7 +121,7 @@ public class WebpSupportStatus {
     return true;
   }
 
-  public static boolean isWebpPlatformSupported(
+  public static boolean isWebpSupportedByPlatform(
       final byte[] imageHeaderBytes,
       final int offset,
       final int headerSize) {

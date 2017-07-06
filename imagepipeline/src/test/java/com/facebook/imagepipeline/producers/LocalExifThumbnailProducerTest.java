@@ -19,15 +19,15 @@ import android.media.ExifInterface;
 import android.net.Uri;
 import android.util.Pair;
 
-import com.facebook.imageformat.ImageFormat;
+import com.facebook.common.memory.PooledByteBuffer;
+import com.facebook.common.memory.PooledByteBufferFactory;
+import com.facebook.imageformat.DefaultImageFormats;
 import com.facebook.imagepipeline.image.EncodedImage;
-import com.facebook.imagepipeline.memory.PooledByteBuffer;
-import com.facebook.imagepipeline.memory.PooledByteBufferFactory;
 import com.facebook.imagepipeline.request.ImageRequest;
-import com.facebook.imageutils.BitmapUtil;
-import com.facebook.imageutils.JfifUtil;
 import com.facebook.imagepipeline.testing.FakeClock;
 import com.facebook.imagepipeline.testing.TestExecutorService;
+import com.facebook.imageutils.BitmapUtil;
+import com.facebook.imageutils.JfifUtil;
 
 import org.junit.*;
 import org.junit.runner.*;
@@ -109,7 +109,7 @@ public class LocalExifThumbnailProducerTest {
           }
         })
         .when(mConsumer)
-        .onNewResult(notNull(EncodedImage.class), anyBoolean());
+        .onNewResult(notNull(EncodedImage.class), anyInt());
   }
 
   @Test
@@ -124,7 +124,7 @@ public class LocalExifThumbnailProducerTest {
         mCapturedEncodedImage.
             getByteBufferRef().getUnderlyingReferenceTestOnly().getRefCountTestOnly());
     assertSame(mThumbnailByteBuffer, mCapturedEncodedImage.getByteBufferRef().get());
-    assertEquals(ImageFormat.JPEG, mCapturedEncodedImage.getImageFormat());
+    assertEquals(DefaultImageFormats.JPEG, mCapturedEncodedImage.getImageFormat());
     assertEquals(WIDTH, mCapturedEncodedImage.getWidth());
     assertEquals(HEIGHT, mCapturedEncodedImage.getHeight());
     assertEquals(ANGLE, mCapturedEncodedImage.getRotationAngle());
@@ -135,7 +135,7 @@ public class LocalExifThumbnailProducerTest {
     when(mExifInterface.hasThumbnail()).thenReturn(false);
     mTestLocalExifThumbnailProducer.produceResults(mConsumer, mProducerContext);
     mTestExecutorService.runUntilIdle();
-    verify(mConsumer).onNewResult(null, true);
+    verify(mConsumer).onNewResult(null, Consumer.IS_LAST);
   }
 
   private class TestLocalExifThumbnailProducer extends LocalExifThumbnailProducer {
@@ -148,7 +148,7 @@ public class LocalExifThumbnailProducerTest {
     }
 
     @Override
-    ExifInterface getExifInterface(Uri uri) throws IOException {
+    ExifInterface getExifInterface(Uri uri) {
       if (uri.equals(mUri)) {
         return mExifInterface;
       }

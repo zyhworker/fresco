@@ -23,7 +23,12 @@
 
 using namespace facebook;
 
+#define APPLICATION_EXT_NETSCAPE "NETSCAPE2.0"
+#define APPLICATION_EXT_NETSCAPE_LEN sizeof(APPLICATION_EXT_NETSCAPE) - 1
+
 #define EXTRA_LOGGING false
+
+#define LOOP_COUNT_MISSING -1;
 
 static void DGifCloseFile2(GifFileType* pGifFile) {
   int errorCode;
@@ -93,6 +98,10 @@ public:
     return m_vectorFrameByteOffsets.size();
   }
 
+  int getLoopCount() {
+    return m_loopCount;
+  }
+
   uint8_t* getRasterBits() {
     return m_rasterBits.data();
   }
@@ -105,7 +114,12 @@ public:
     return m_rasterMutex;
   }
 
+  void setLoopCount(int pLoopCount) {
+    m_loopCount = pLoopCount;
+  }
+
 private:
+  int m_loopCount = LOOP_COUNT_MISSING;
   std::unique_ptr<GifFileType, decltype(&DGifCloseFile2)> m_spGifFile;
   std::shared_ptr<DataWrapper> m_spData;
   std::vector<int> m_vectorFrameByteOffsets;
@@ -264,14 +278,15 @@ static ColorMapObject* genDefColorMap(void) {
 ////////////////////////////////////////////////////////////////
 
 bool getGraphicsControlBlockForImage(SavedImage* pSavedImage, GraphicsControlBlock* pGcp) {
+  int resultCode = GIF_ERROR;
+  // If a GIF has multiple graphic control extension blocks, we use the last one
   for (int i = 0; i < pSavedImage->ExtensionBlockCount; i++) {
     ExtensionBlock* pExtensionBlock = &pSavedImage->ExtensionBlocks[i];
     if (pExtensionBlock->Function == GRAPHICS_EXT_FUNC_CODE) {
-      DGifExtensionToGCB(pExtensionBlock->ByteCount, pExtensionBlock->Bytes, pGcp);
-      return true;
+      resultCode = DGifExtensionToGCB(pExtensionBlock->ByteCount, pExtensionBlock->Bytes, pGcp);
     }
   }
-  return false;
+  return resultCode == GIF_OK;
 }
 
 /**
@@ -298,11 +313,16 @@ int readSingleFrame(
   }
   SavedImage* pSavedImage = &pGifFile->SavedImages[pGifFile->ImageCount - 1];
 
-  // Check size of image.
-  if (pSavedImage->ImageDesc.Width <= 0 &&
-      pSavedImage->ImageDesc.Height <= 0 &&
-      pSavedImage->ImageDesc.Width > (INT_MAX / pSavedImage->ImageDesc.Height)) {
+  // Check size of image. Note: Frames with 0 width or height should be allowed.
+  if (pSavedImage->ImageDesc.Width < 0 || pSavedImage->ImageDesc.Height < 0) {
     return GIF_ERROR;
+  }
+
+  // Check for image size overflow.
+  if (pSavedImage->ImageDesc.Width > 0 &&
+      pSavedImage->ImageDesc.Height > 0 &&
+      pSavedImage->ImageDesc.Width > (INT_MAX / pSavedImage->ImageDesc.Height)) {
+      return GIF_ERROR;
   }
 
   size_t imageSize = pSavedImage->ImageDesc.Width * pSavedImage->ImageDesc.Height;
@@ -411,6 +431,50 @@ int decodeExtension(GifFileType* pGifFile) {
 }
 
 /**
+ * Tries to parse known application extensions of a given SavedImage and adds the information
+ * to the GifWrapper accordingly. Currently, this method only parses the Netscape 2.0 looping
+ * extension which can indicate how often a GIF animation shall be played.
+ *
+ * @param pSavedImage saved image that might contain several ExtensionBlocks
+ * @param pGifWrapper gif wrapper containing the giflib struct and additional data
+ */
+void parseApplicationExtensions(SavedImage* pSavedImage, GifWrapper* pGifWrapper) {
+  const int extensionCount = pSavedImage->ExtensionBlockCount;
+  for (int j = 0; j < extensionCount; j++) {
+    const ExtensionBlock* extensionBlock = &pSavedImage->ExtensionBlocks[j];
+
+    if (extensionBlock->Function != APPLICATION_EXT_FUNC_CODE) {
+      continue;
+    }
+
+    // Check for Netscape 2.0 looping block
+    if (extensionBlock->ByteCount == APPLICATION_EXT_NETSCAPE_LEN &&
+        strncmp(
+          APPLICATION_EXT_NETSCAPE,
+          (const char*) extensionBlock->Bytes,
+          APPLICATION_EXT_NETSCAPE_LEN) == 0) {
+
+      // The data sub-block has been added as the following extension block
+      ExtensionBlock* subBlock = NULL;
+      if (j + 1 < extensionCount) {
+        subBlock = &pSavedImage->ExtensionBlocks[j + 1];
+      }
+
+      if (subBlock != NULL &&
+          subBlock->Function == CONTINUE_EXT_FUNC_CODE &&
+          subBlock->ByteCount == 3) {
+        // The loop count is stored little endian
+        const int loopCount = subBlock->Bytes[1] | subBlock->Bytes[2] << 8;
+        pGifWrapper->setLoopCount(loopCount);
+
+        // The looping extension is the only block that we are interested in
+        break;
+      }
+    }
+  }
+}
+
+/**
  * A heavily modified version of giflib's DGifSlurp. This uses some hacks to avoid caching the
  * decoded pixel data for each frame in memory. Like DGifSlurp, GifFileType will contain the
  * results of slurping the GIF but there will be no frame pixel data cached in
@@ -458,9 +522,16 @@ int modifiedDGifSlurp(GifWrapper* pGifWrapper) {
        default:    // Should be trapped by DGifGetRecordType.
         break;
       }
-    } while (!isStop);
-    isStop = false;
-    return pGifWrapper->getFrameSize() > 0 ? GIF_OK : GIF_ERROR;
+  } while (!isStop);
+  isStop = false;
+
+  // parse application extensions
+  const int imageCount = pGifFile->ImageCount;
+  for (int i = 0; i < imageCount; i++) {
+    parseApplicationExtensions(&pGifFile->SavedImages[i], pGifWrapper);
+  }
+
+  return pGifWrapper->getFrameSize() > 0 ? GIF_OK : GIF_ERROR;
 }
 
 /**
@@ -539,6 +610,9 @@ jobject GifImage_nativeCreateFromByteVector(JNIEnv* pEnv, std::vector<uint8_t>& 
   }
   spNativeContext->durationMs = durationMs;
   spNativeContext->frameDurationsMs = frameDurationsMs;
+
+  // Cache loop count
+  spNativeContext->loopCount = spNativeContext->spGifWrapper->getLoopCount();
 
   // Create the GifImage with the native context.
   jobject ret = pEnv->NewObject(
@@ -1007,7 +1081,7 @@ void GifFrame_nativeRenderFrame(
     throwIllegalArgumentException(pEnv, "Width or height is negative");
     return;
   }
-  
+
   if (bitmapInfo.width < (unsigned) width || bitmapInfo.height < (unsigned) height) {
     throwIllegalStateException(pEnv, "Width or height is too small");
     return;
@@ -1077,6 +1151,53 @@ jint GifFrame_nativeGetDurationMs(JNIEnv* pEnv, jobject thiz) {
     return -1;
   }
   return spNativeContext->durationMs;
+}
+
+/**
+ * Gets the color (as an int, as in Android) of the transparent pixel of this frame
+ *
+ * @return the color (as an int, as in Android) of the transparent pixel of this frame
+ */
+jint GifFrame_nativeGetTransparentPixelColor(JNIEnv* pEnv, jobject thiz) {
+  auto spNativeContext = getGifFrameNativeContext(pEnv, thiz);
+  auto pGifWrapper = spNativeContext->spGifWrapper;
+
+  //
+  // Get the right color table to use, then get index of transparent pixel into that table
+  //
+  int frameNum = spNativeContext->frameNum;
+  ColorMapObject* pColorMap = pGifWrapper->get()->SColorMap;
+  SavedImage* pSavedImage = &pGifWrapper->get()->SavedImages[frameNum];
+
+  if (pSavedImage->ImageDesc.ColorMap != NULL) {
+    // use local color table
+    pColorMap = pSavedImage->ImageDesc.ColorMap;
+    if (pColorMap->ColorCount != (1 << pColorMap->BitsPerPixel)) {
+      pColorMap = sDefaultColorMap;
+    }
+  }
+
+  int colorIndex = spNativeContext->transparentIndex;
+
+  if (pColorMap != NULL  &&  colorIndex >= 0) {
+    PixelType32 color = getColorFromTable(colorIndex, pColorMap);
+
+    //
+    // convert PixelType32 to Android-style int color value.
+    // the c++ compiler will optimize these four lines of bit-shifting -- there is no need to
+    // collapse them into a single confusing expression
+    //
+    int alphaShifted  = color.alpha   << 24;
+    int redShifted    = color.red     << 16;
+    int greenShifted  = color.green   <<  8;
+    int blueShifted   = color.blue    <<  0;
+
+    int iColor = alphaShifted | redShifted | greenShifted | blueShifted;
+
+    return iColor;
+  } else {
+    return 0; // in android, 0 == Color.TRANSPARENT
+  }
 }
 
 jboolean GifFrame_nativeHasTransparency(JNIEnv* pEnv, jobject thiz) {
@@ -1244,6 +1365,9 @@ static JNINativeMethod sGifFrameMethods[] = {
   { "nativeGetDurationMs",
     "()I",
     (void*)GifFrame_nativeGetDurationMs },
+  { "nativeGetTransparentPixelColor",
+    "()I",
+    (void*)GifFrame_nativeGetTransparentPixelColor },
   { "nativeHasTransparency",
     "()Z",
     (void*)GifFrame_nativeHasTransparency },

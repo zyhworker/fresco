@@ -11,6 +11,7 @@ package com.facebook.drawee.drawable;
 
 import android.graphics.Matrix;
 import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
 
 import javax.annotation.Nullable;
 
@@ -105,29 +106,28 @@ public class ScalingUtils {
         float focusY);
   }
 
-  /**
-   * Gets transformation based on the scale type.
-   * @param transform out matrix to store result
-   * @param parentBounds parent bounds
-   * @param childWidth child width
-   * @param childHeight child height
-   * @param focusX focus point x coordinate, relative [0...1]
-   * @param focusY focus point y coordinate, relative [0...1]
-   * @param scaleType scale type to be used
-   * @return reference to the out matrix
-   *
-   * @deprecated use {@code ScaleType.getTransform}
-   */
-  @Deprecated
-  public static Matrix getTransform(
-      final Matrix transform,
-      final Rect parentBounds,
-      final int childWidth,
-      final int childHeight,
-      final float focusX,
-      final float focusY,
-      final ScaleType scaleType) {
-    return scaleType.getTransform(transform, parentBounds, childWidth, childHeight, focusX, focusY);
+  @Nullable
+  public static ScaleTypeDrawable getActiveScaleTypeDrawable(Drawable drawable) {
+    if (drawable == null) {
+      return null;
+    } else if (drawable instanceof ScaleTypeDrawable) {
+      return (ScaleTypeDrawable) drawable;
+    } else if (drawable instanceof DrawableParent) {
+      final Drawable childDrawable = ((DrawableParent) drawable).getDrawable();
+      return getActiveScaleTypeDrawable(childDrawable);
+    } else if (drawable instanceof ArrayDrawable) {
+      final ArrayDrawable fadeDrawable = (ArrayDrawable) drawable;
+      final int numLayers = fadeDrawable.getNumberOfLayers();
+
+      for (int i = 0; i < numLayers; i++) {
+        final Drawable childDrawable = fadeDrawable.getDrawable(i);
+        final ScaleTypeDrawable result = getActiveScaleTypeDrawable(childDrawable);
+        if (result != null) {
+          return result;
+        }
+      }
+    }
+    return null;
   }
 
   /**
@@ -161,7 +161,9 @@ public class ScalingUtils {
   }
 
   private static class ScaleTypeFitXY extends AbstractScaleType {
+
     public static final ScaleType INSTANCE = new ScaleTypeFitXY();
+
     @Override
     public void getTransformImpl(
         Matrix outTransform,
@@ -177,10 +179,17 @@ public class ScalingUtils {
       outTransform.setScale(scaleX, scaleY);
       outTransform.postTranslate((int) (dx + 0.5f), (int) (dy + 0.5f));
     }
+
+    @Override
+    public String toString() {
+      return "fit_xy";
+    }
   }
 
   private static class ScaleTypeFitStart extends AbstractScaleType {
+
     public static final ScaleType INSTANCE = new ScaleTypeFitStart();
+
     @Override
     public void getTransformImpl(
         Matrix outTransform,
@@ -196,6 +205,11 @@ public class ScalingUtils {
       float dy = parentRect.top;
       outTransform.setScale(scale, scale);
       outTransform.postTranslate((int) (dx + 0.5f), (int) (dy + 0.5f));
+    }
+
+    @Override
+    public String toString() {
+      return "fit_start";
     }
   }
 
@@ -219,6 +233,11 @@ public class ScalingUtils {
       outTransform.setScale(scale, scale);
       outTransform.postTranslate((int) (dx + 0.5f), (int) (dy + 0.5f));
     }
+
+    @Override
+    public String toString() {
+      return "fit_center";
+    }
   }
 
   private static class ScaleTypeFitEnd extends AbstractScaleType {
@@ -241,6 +260,11 @@ public class ScalingUtils {
       outTransform.setScale(scale, scale);
       outTransform.postTranslate((int) (dx + 0.5f), (int) (dy + 0.5f));
     }
+
+    @Override
+    public String toString() {
+      return "fit_end";
+    }
   }
 
   private static class ScaleTypeCenter extends AbstractScaleType {
@@ -260,6 +284,11 @@ public class ScalingUtils {
       float dx = parentRect.left + (parentRect.width() - childWidth) * 0.5f;
       float dy = parentRect.top + (parentRect.height() - childHeight) * 0.5f;
       outTransform.setTranslate((int) (dx + 0.5f), (int) (dy + 0.5f));
+    }
+
+    @Override
+    public String toString() {
+      return "center";
     }
   }
 
@@ -282,6 +311,11 @@ public class ScalingUtils {
       float dy = parentRect.top + (parentRect.height() - childHeight * scale) * 0.5f;
       outTransform.setScale(scale, scale);
       outTransform.postTranslate((int) (dx + 0.5f), (int) (dy + 0.5f));
+    }
+
+    @Override
+    public String toString() {
+      return "center_inside";
     }
   }
 
@@ -311,6 +345,11 @@ public class ScalingUtils {
       }
       outTransform.setScale(scale, scale);
       outTransform.postTranslate((int) (dx + 0.5f), (int) (dy + 0.5f));
+    }
+
+    @Override
+    public String toString() {
+      return "center_crop";
     }
   }
 
@@ -342,6 +381,11 @@ public class ScalingUtils {
       }
       outTransform.setScale(scale, scale);
       outTransform.postTranslate((int) (dx + 0.5f), (int) (dy + 0.5f));
+    }
+
+    @Override
+    public String toString() {
+      return "focus_crop";
     }
   }
 
@@ -451,6 +495,14 @@ public class ScalingUtils {
       }
       transform.setValues(mMatrixValuesInterpolated);
       return transform;
+    }
+
+    @Override
+    public String toString() {
+      return String.format(
+          "InterpolatingScaleType(%s -> %s)",
+          String.valueOf(mScaleTypeFrom),
+          String.valueOf(mScaleTypeTo));
     }
   }
 }
